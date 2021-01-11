@@ -217,8 +217,8 @@ func (t *Tail) Print(msg string) {
 	if t.parseLine {
 		decoder := json.NewDecoder(strings.NewReader(msg))
 		jobj := make(map[string]interface{})
-		// failed decoding will lead to failed template exectution. handle errors there.
 		err := decoder.Decode(&jobj)
+		// failed decoding will lead to failed template execution. handle errors there.
 		if err == nil {
 			vm.Parsed = jobj
 		}
