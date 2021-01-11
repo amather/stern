@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -47,6 +48,7 @@ type Tail struct {
 	active         bool
 	out            io.Writer
 	errOut         io.Writer
+	parseLine      bool
 }
 
 type TailOptions struct {
@@ -83,7 +85,7 @@ func (o TailOptions) IsInclude(msg string) bool {
 }
 
 // NewTail returns a new tail for a Kubernetes container inside a pod
-func NewTail(clientset corev1client.CoreV1Interface, nodeName, namespace, podName, containerName string, tmpl *template.Template, out, errOut io.Writer, options *TailOptions) *Tail {
+func NewTail(clientset corev1client.CoreV1Interface, nodeName, namespace, podName, containerName string, tmpl *template.Template, out, errOut io.Writer, parseLine bool, options *TailOptions) *Tail {
 	return &Tail{
 		clientset:     clientset,
 		NodeName:      nodeName,
@@ -96,6 +98,7 @@ func NewTail(clientset corev1client.CoreV1Interface, nodeName, namespace, podNam
 		active:        true,
 		out:           out,
 		errOut:        errOut,
+		parseLine:     parseLine,
 	}
 }
 
@@ -211,6 +214,16 @@ func (t *Tail) Print(msg string) {
 		ContainerColor: t.containerColor,
 	}
 
+	if t.parseLine {
+		decoder := json.NewDecoder(strings.NewReader(msg))
+		jobj := make(map[string]interface{})
+		// failed decoding will lead to failed template exectution. handle errors there.
+		err := decoder.Decode(&jobj)
+		if err == nil {
+			vm.Parsed = jobj
+		}
+	}
+
 	var buf bytes.Buffer
 	if err := t.tmpl.Execute(&buf, vm); err != nil {
 		fmt.Fprintf(t.errOut, "expanding template failed: %s\n", err)
@@ -230,6 +243,9 @@ func (t *Tail) isActive() bool {
 type Log struct {
 	// Message is the log message itself
 	Message string `json:"message"`
+
+	// Parsed version of log message
+	Parsed map[string]interface{} `json:"parsed"`
 
 	// Node name of the pod
 	NodeName string `json:"nodeName"`

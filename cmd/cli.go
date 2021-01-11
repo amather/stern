@@ -59,6 +59,7 @@ type Options struct {
 	completion       string
 	template         string
 	output           string
+	parseLine        bool
 }
 
 var opts = &Options{
@@ -97,6 +98,7 @@ func Run() {
 	cmd.Flags().StringVar(&opts.completion, "completion", opts.completion, "Outputs stern command-line completion code for the specified shell. Can be 'bash' or 'zsh'")
 	cmd.Flags().StringVar(&opts.template, "template", opts.template, "Template to use for log lines, leave empty to use --output flag")
 	cmd.Flags().StringVarP(&opts.output, "output", "o", opts.output, "Specify predefined template. Currently support: [default, raw, json]")
+	cmd.Flags().BoolVar(&opts.parseLine, "parse-line", opts.parseLine, "Parse each line as JSON and expose fields under template field .Parsed")
 
 	// Specify custom bash completion function
 	cmd.BashCompletionFunction = bash_completion_func
@@ -285,6 +287,7 @@ func parseConfig(args []string) (*stern.Config, error) {
 		LabelSelector:         labelSelector,
 		TailLines:             tailLines,
 		Template:              template,
+		ParseLine:             opts.parseLine,
 	}, nil
 }
 
