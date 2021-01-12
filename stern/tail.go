@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 	"text/template"
@@ -31,6 +32,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
+
+	"github.com/chromedp/chromedp"
+	"nhooyr.io/websocket"
+	"nhooyr.io/websocket/wsjson"
 )
 
 type Tail struct {
@@ -49,6 +54,10 @@ type Tail struct {
 	out            io.Writer
 	errOut         io.Writer
 	parseLine      bool
+	chromeCtx      context.Context
+	chromeCancel   context.CancelFunc
+	ws             *websocket.Conn
+	wsCtx          context.Context
 }
 
 type TailOptions struct {
@@ -86,6 +95,19 @@ func (o TailOptions) IsInclude(msg string) bool {
 
 // NewTail returns a new tail for a Kubernetes container inside a pod
 func NewTail(clientset corev1client.CoreV1Interface, nodeName, namespace, podName, containerName string, tmpl *template.Template, out, errOut io.Writer, parseLine bool, options *TailOptions) *Tail {
+
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if parseLine {
+		opts := append(
+			chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.Flag("headless", false),
+			chromedp.Flag("auto-open-devtools-for-tabs", true),
+		)
+		actx, _ := chromedp.NewExecAllocator(context.Background(), opts...)
+		ctx, cancel = chromedp.NewContext(actx)
+	}
+
 	return &Tail{
 		clientset:     clientset,
 		NodeName:      nodeName,
@@ -99,6 +121,8 @@ func NewTail(clientset corev1client.CoreV1Interface, nodeName, namespace, podNam
 		out:           out,
 		errOut:        errOut,
 		parseLine:     parseLine,
+		chromeCtx:     ctx,
+		chromeCancel:  cancel,
 	}
 }
 
@@ -127,8 +151,40 @@ func (t *Tail) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {
 		<-t.closed
+		if t.parseLine {
+			t.chromeCancel()
+		}
 		cancel()
 	}()
+
+	// go func() {
+	// 	wsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 		c, err := websocket.Accept(w, r, nil)
+	// 		if err != nil {
+	// 			return
+	// 		}
+
+	// 		if t.ws == nil {
+	// 			t.ws = c
+	// 			t.wsCtx = ctx
+	// 		}
+
+	// 	})
+	// 	err := http.ListenAndServe(":12345", wsHandler)
+	// 	if err != nil {
+	// 		panic("ListenAndServe: " + err.Error())
+	// 	}
+	// }()
+
+	js := `
+	const ws = new WebSocket("ws://localhost:12345")
+	ws.onmessage = e => console.log(e.data)
+	`
+	var res []string
+	err := chromedp.Run(t.chromeCtx, chromedp.Evaluate(js, &res))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "chromedp.Run error: %v\n", err)
+	}
 
 	g := color.New(color.FgHiGreen, color.Bold).SprintFunc()
 	p := t.podColor.SprintFunc()
@@ -147,7 +203,7 @@ func (t *Tail) Start(ctx context.Context) error {
 		TailLines:    t.Options.TailLines,
 	})
 
-	err := t.ConsumeRequest(ctx, req)
+	err = t.ConsumeRequest(ctx, req)
 	t.active = false
 
 	if errors.Is(err, context.Canceled) {
@@ -221,6 +277,10 @@ func (t *Tail) Print(msg string) {
 		// failed decoding will lead to failed template execution. handle errors there.
 		if err == nil {
 			vm.Parsed = jobj
+		}
+
+		if t.ws != nil {
+			wsjson.Write(t.wsCtx, t.ws, msg)
 		}
 	}
 
